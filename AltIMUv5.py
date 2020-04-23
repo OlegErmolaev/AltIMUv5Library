@@ -63,7 +63,12 @@ class _I2C:
             self._bus.write_byte_data(addr, register, data[i])
     
 class AltIMU10v5 (threading.Thread):
-    def __init__(self):
+    """
+    класс для работы с датчиком AltIMU10-v5
+    :param xlResolution: разрешение аксселлерометра (00: ±2 g; 01: ±16 g; 10: ±4 g; 11: ±8 g)
+    :param gyroResolution: разрешение гироскопа (00: 250 dps; 01: 500 dps; 10: 1000 dps; 11: 2000 dps)
+    """
+    def __init__(self, xlResolution = 0b10, gyroResolution = 0b10):
         threading.Thread.__init__(self)
         
         self._i2c = _I2C()
@@ -75,8 +80,8 @@ class AltIMU10v5 (threading.Thread):
 
         ### Регистры для LSM6DS33 гироскоп/аксселерометр ###
         self._WHO_AM_I = 0x0f #who i am reg 0x69 fixed 
-        self._CTRL1_XL = 0x10 #режим работы аксселлерометра 0x80 - 1.66 kHz 0x90 - 3.33 kHz 0xA0 - 6.66 kHz
-        self._CTRL2_G = 0x11 #режим работы гироскопа 0x80 - 1.66 kHz
+        self._CTRL1_XL = 0x10 #режим работы аксселлерометра 1000XXXX - 1.66 kHz 1001XXXX - 3.33 kHz 1010XXXX - 6.66 kHz XXXX(00: ±2 g; 01: ±16 g; 10: ±4 g; 11: ±8 g)00
+        self._CTRL2_G = 0x11 #режим работы гироскопа 1000XXXX - 1.66 kHz XXXX(00: 250 dps; 01: 500 dps; 10: 1000 dps; 11: 2000 dps)00
         self._CTRL3_C = 0x12 # управляющий регистр 0x04 для работы i2c
 
         self._STATUS_REG = 0x1e #наличие новых данных с датчиков b00000TDA,GDA,XLDA
@@ -95,6 +100,12 @@ class AltIMU10v5 (threading.Thread):
         self._OUTZ_L_XL = 0x2C # Z ускорение
         self._OUTZ_H_XL = 0x2D
 
+        self._xlSensDict = {0b00:0.061,0b01:0.4888,0b10:0.122,0b11:0.244} #mg/LSB
+        self._gSendDict = {0b00:8.75,0b01:17.50,0b10:35,0b11:70} #mdps/LSB
+
+        self._xlSens = self._xlSensDict.get(xlResolution) * 1000 #g/LSB
+        self._gSens = self._gSendDict.get(gyroResolution) * 1000 #dps/LSB
+
         # проверка шины
         try:
             if(self._i2c.readU8(self._GYRO_ACCEL, self._WHO_AM_I) != 0x69):
@@ -103,8 +114,8 @@ class AltIMU10v5 (threading.Thread):
             raise gyroXlSensorException("Unable to find on bus addr")
 
         #инициализация гироскопа/аксселлерометра
-        self._i2c.writeByteData(self._GYRO_ACCEL, self._CTRL1_XL, 0x80)
-        self._i2c.writeByteData(self._GYRO_ACCEL, self._CTRL2_G, 0x80)
+        self._i2c.writeByteData(self._GYRO_ACCEL, self._CTRL1_XL, (0b1000 << 2 | xlResolution) << 2 | 0x00) # 1.66 kHz ±4 g by default
+        self._i2c.writeByteData(self._GYRO_ACCEL, self._CTRL2_G, (0b1000 << 2 | gyroResolution) << 2 | 0x00) # 1.66 kHz  ±250 dps by default
         self._i2c.writeByteData(self._GYRO_ACCEL, self._CTRL3_C, 0x04)
 
         self._prevTime = 0 # время от предыдущего измерения для акселлерометра
@@ -113,15 +124,14 @@ class AltIMU10v5 (threading.Thread):
 
     def getGyro(self):
         """
-        возвращает углы поворота в радианах 
+        возвращает угловое ускорение в град/с
         :param вывод [x,y,z]
         """
         
         if(self._i2c.readU8(self._GYRO_ACCEL, self._STATUS_REG) & 0x02 == 0x02):
-            #raw data
-            x = (self._i2c.readU8(self._GYRO_ACCEL, self._OUTX_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, self._OUTX_L_G))
-            y = (self._i2c.readU8(self._GYRO_ACCEL, self._OUTY_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, self._OUTY_L_G))
-            z = (self._i2c.readU8(self._GYRO_ACCEL, self._OUTZ_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, self._OUTZ_L_G))
+            x = (self._i2c.readU8(self._GYRO_ACCEL, self._OUTX_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, self._OUTX_L_G))*self._gSens
+            y = (self._i2c.readU8(self._GYRO_ACCEL, self._OUTY_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, self._OUTY_L_G))*self._gSens
+            z = (self._i2c.readU8(self._GYRO_ACCEL, self._OUTZ_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, self._OUTZ_L_G))*self._gSens
 
             return [x, y, z]
         else:
@@ -135,13 +145,9 @@ class AltIMU10v5 (threading.Thread):
         pass
 
     def _readXl(self):
+        pass
         while self._running:
             pass
-
-    def _eulerAngles(self, matrix):
-        pitch = -asin(matrix[2][0])
-        roll = atan2(matrix[2][1],matrix[2][2])
-        yaw = atan(matrix[1][0], matrix[0][0])
 
     def stop(self):
         self._running = False
