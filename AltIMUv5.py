@@ -2,6 +2,8 @@ import smbus as i2c
 import time
 import threading
 from math import *
+from enum import IntEnum
+import os
 
 class gyroXlSensorException(Exception):
     def __init__(self, message):
@@ -71,6 +73,7 @@ class AltIMU10v5 (threading.Thread):
     def __init__(self, xlResolution = 0b10, gyroResolution = 0b10):
         threading.Thread.__init__(self)
         
+
         self._i2c = _I2C()
 
         ### devices addreses 
@@ -78,71 +81,72 @@ class AltIMU10v5 (threading.Thread):
         self._MAGNET = 0x1e
         self._BARO = 0x5d
 
-        ### Регистры для LSM6DS33 гироскоп/аксселерометр ###
-        self._WHO_AM_I = 0x0f #who i am reg 0x69 fixed 
-        self._CTRL1_XL = 0x10 #режим работы аксселлерометра 1000XXXX - 1.66 kHz 1001XXXX - 3.33 kHz 1010XXXX - 6.66 kHz XXXX(00: ±2 g; 01: ±16 g; 10: ±4 g; 11: ±8 g)00
-        self._CTRL2_G = 0x11 #режим работы гироскопа 1000XXXX - 1.66 kHz XXXX(00: 250 dps; 01: 500 dps; 10: 1000 dps; 11: 2000 dps)00
-        self._CTRL3_C = 0x12 # управляющий регистр 0x04 для работы i2c
-
-        self._STATUS_REG = 0x1e #наличие новых данных с датчиков b00000TDA,GDA,XLDA
-
-        self._OUTX_L_G = 0x22 # Х поворот
-        self._OUTX_H_G = 0x23
-        self._OUTY_L_G = 0x24 # Y поворот
-        self._OUTY_H_G = 0x25
-        self._OUTZ_L_G = 0x26 # Z поворот
-        self._OUTZ_H_G = 0x27
-
-        self._OUTX_L_XL = 0x28 # X ускорение 
-        self._OUTX_H_XL = 0x29
-        self._OUTY_L_XL = 0x2A # Y ускорение 
-        self._OUTY_H_XL = 0x2B
-        self._OUTZ_L_XL = 0x2C # Z ускорение
-        self._OUTZ_H_XL = 0x2D
-
+        
         self._xlSensDict = {0b00:0.061,0b01:0.4888,0b10:0.122,0b11:0.244} #mg/LSB
         self._gSendDict = {0b00:8.75,0b01:17.50,0b10:35,0b11:70} #mdps/LSB
 
-        self._xlSens = self._xlSensDict.get(xlResolution) * 1000 #g/LSB
-        self._gSens = self._gSendDict.get(gyroResolution) * 1000 #dps/LSB
+        self._xlSens = self._xlSensDict.get(xlResolution) / 1000 #g/LSB
+        self._gSens = self._gSendDict.get(gyroResolution) / 1000 #dps/LSB
 
         # проверка шины
         try:
-            if(self._i2c.readU8(self._GYRO_ACCEL, self._WHO_AM_I) != 0x69):
+            if(self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.WHO_AM_I) != 0x69):
                 raise gyroXlSensorException("Imcorrect device with addr %s" % str(hex(self._GYRO_ACCEL)))
         except OSError:
             raise gyroXlSensorException("Unable to find on bus addr")
 
         #инициализация гироскопа/аксселлерометра
-        self._i2c.writeByteData(self._GYRO_ACCEL, self._CTRL1_XL, (0b1000 << 2 | xlResolution) << 2 | 0x00) # 1.66 kHz ±4 g by default
-        self._i2c.writeByteData(self._GYRO_ACCEL, self._CTRL2_G, (0b1000 << 2 | gyroResolution) << 2 | 0x00) # 1.66 kHz  ±250 dps by default
-        self._i2c.writeByteData(self._GYRO_ACCEL, self._CTRL3_C, 0x04)
+        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL1_XL, (0b1000 << 2 | xlResolution) << 2 & 0xFC) # 1.66 kHz ±4 g by default
+        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL2_G, (0b1000 << 2 | gyroResolution) << 2 & 0xFC) # 1.66 kHz  ±250 dps by default
+        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL3_C, 0x04)
+        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.ORIENT_CFG_G, 0b00001000) # меняем знак по z
 
         self._prevTime = 0 # время от предыдущего измерения для акселлерометра
         self._running = True
-        self._readXl()
+        self._readXlThread = threading.Thread(target=self._readXl)
+        self._readXlThread.start()
 
     def getGyro(self):
         """
         возвращает угловое ускорение в град/с
-        :param вывод [x,y,z]
+        :output вывод [x,y,z]
         """
-        
-        if(self._i2c.readU8(self._GYRO_ACCEL, self._STATUS_REG) & 0x02 == 0x02):
-            x = (self._i2c.readU8(self._GYRO_ACCEL, self._OUTX_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, self._OUTX_L_G))*self._gSens
-            y = (self._i2c.readU8(self._GYRO_ACCEL, self._OUTY_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, self._OUTY_L_G))*self._gSens
-            z = (self._i2c.readU8(self._GYRO_ACCEL, self._OUTZ_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, self._OUTZ_L_G))*self._gSens
+        if(self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.STATUS_REG) & 0x02 == 0x02):
+            try:
+                x = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTX_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTX_L_G))*self._gSens
+                y = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTY_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTY_L_G))*self._gSens
+                z = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTZ_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTZ_L_G))*self._gSens
 
-            return [x, y, z]
+                return [x, y, z]
+            except:
+                self.stop()
+                raise readGyroException("Unable to read data from gyro")
         else:
-            raise readreadGyroException
+            return None
 
     def getXl(self):
         """
         возвращает ускорение по осям
-        :param вывод [x,y,z]
+        :output вывод [x,y,z]
         """
-        pass
+        _state = self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.STATUS_REG)
+        print(_state)
+        if(_state & 0x01 == 0x01):
+            try:
+                x = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTX_H_XL) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTX_L_XL))*self._xlSens
+                y = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTY_H_XL) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTY_L_XL))*self._xlSens
+                z = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTZ_H_XL) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTZ_L_XL))*self._xlSens
+
+                return [x, y, z]
+            except:
+                self.stop()
+                raise readXlException("Unable to read data from xl")
+        else:
+            print(str(bin(_state)))
+            return None
+
+    def getTemp(self): # какая-то дичь выдает не пойми что
+        return (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTX_H_XL) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTX_L_XL))/16
 
     def _readXl(self):
         pass
@@ -151,6 +155,36 @@ class AltIMU10v5 (threading.Thread):
 
     def stop(self):
         self._running = False
+        #self._readXlThread.stop()
+        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL1_XL, 0x00)
+        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL2_G, 0x00)
 
-        
+
+class _LSM6DS33(IntEnum):       
+    ### Регистры для LSM6DS33 гироскоп/аксселерометр ###
+    WHO_AM_I = 0x0f #who i am reg 0x69 fixed 
+    CTRL1_XL = 0x10 #режим работы аксселлерометра 1000XXXX - 1.66 kHz 1001XXXX - 3.33 kHz 1010XXXX - 6.66 kHz XXXX(00: ±2 g; 01: ±16 g; 10: ±4 g; 11: ±8 g)00
+    CTRL2_G = 0x11 #режим работы гироскопа 1000XXXX - 1.66 kHz XXXX(00: 250 dps; 01: 500 dps; 10: 1000 dps; 11: 2000 dps)00
+    CTRL3_C = 0x12 # управляющий регистр 0x04 для работы i2c
+
+    STATUS_REG = 0x1e #наличие новых данных с датчиков b00000TDA,GDA,XLDA
+
+    OUT_TEMP_L = 0x20 #температура
+    OUT_TEMP_H = 0x21
+
+    OUTX_L_G = 0x22 # Х поворот
+    OUTX_H_G = 0x23
+    OUTY_L_G = 0x24 # Y поворот
+    OUTY_H_G = 0x25
+    OUTZ_L_G = 0x26 # Z поворот
+    OUTZ_H_G = 0x27
+
+    ORIENT_CFG_G = 0x0b # знак гироскопа
+
+    OUTX_L_XL = 0x28 # X ускорение 
+    OUTX_H_XL = 0x29
+    OUTY_L_XL = 0x2A # Y ускорение 
+    OUTY_H_XL = 0x2B
+    OUTZ_L_XL = 0x2C # Z ускорение
+    OUTZ_H_XL = 0x2D       
         
