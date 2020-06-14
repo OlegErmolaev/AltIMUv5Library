@@ -91,8 +91,8 @@ class AltIMU10v5 (threading.Thread):
 
         self._xlSens = self._xlSensDict.get(xlResolution) / 1000 #g/LSB
         self._gSens = self._gSendDict.get(gyroResolution) / 1000 #dps/LSB
-        self._barSens = 4096 #lsb/hPa
-        self._tempSens = 480 #lsb/celDeg
+        #self._barSens = 4096 #lsb/hPa
+        #self._tempSens = 480 #lsb/celDeg
 
         # проверка шины
         try:
@@ -101,22 +101,19 @@ class AltIMU10v5 (threading.Thread):
         except OSError:
             raise gyroXlSensorException("Unable to find on bus addr")
 
-        try:
+        '''try:
             if(self._i2c.readU8(self._BAR, _LPS25H.WHO_AM_I) != 0xbd):
                 raise baroSensorException("Imcorrect device with addr %s" % str(hex(self._BAR)))
         except OSError:
-            raise baroSensorException("Unable to find on bus addr")
+            raise baroSensorException("Unable to find on bus addr")'''
 
         #инициализация гироскопа/аксселлерометра
-        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL1_XL, (0b1000 << 2 | xlResolution) << 2 & 0xFC) # 1.66 kHz ±4 g by default
-        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL2_G, (0b1000 << 2 | gyroResolution) << 2 & 0xFC) # 1.66 kHz  ±250 dps by default
-        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL3_C, 0x04)
-        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL7_G, 0x60) 
-        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL5_C, 0x6c)
-        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.ORIENT_CFG_G, 0b00001000) # меняем знак по z
+        self.init_gyro()
+        
+        #self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.ORIENT_CFG_G, 0b00001000) # меняем знак по z
 
         #инициализация барометра
-        self._i2c.writeByteData(self._BAR, _LPS25H.CTRL_REG1, 0b11000000) # 25 Hz power on
+        #self._i2c.writeByteData(self._BAR, _LPS25H.CTRL_REG1, 0b11000000) # 25 Hz power on
 
 
         self._prevTimeXl = 0 # время от предыдущего измерения для акселлерометра
@@ -127,6 +124,21 @@ class AltIMU10v5 (threading.Thread):
         self._running = True
         self._readXlThread = threading.Thread(target=self._readXl)
         self._readXlThread.start()
+
+    def init_gyro(self):
+        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL3_C, 0x44) #IF_INC and BDU enable
+        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.FIFO_CTRL5, 0x00) #FIFO mode bypass
+        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL2_G, _LSM6DS33.ACC_GYRO_ODR_G_POWER_DOWN)#выключаем датчик
+        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL2_G, _LSM6DS33.ACC_GYRO_ODR_G_POWER_DOWN)
+        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL10_C, 0x38) #включим оси
+        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL2_G, _LSM6DS33.ACC_GYRO_ODR_G_833Hz | _LSM6DS33.GYRO_FS_G_500dps)# включаем на скорость 833 Гц
+
+        '''self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL1_XL, (0b1000 << 2 | xlResolution) << 2 & 0xFC) # 1.66 kHz ±4 g by default
+        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL2_G, (0b1000 << 2 | gyroResolution) << 2 & 0xFE) # 1.66 kHz  ±250 dps by default
+        #self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL3_C, 0x04)
+        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL7_G, 0x60) 
+        #self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL5_C, 0x6c)
+        '''
 
     def getGyroCurr(self):
         """
@@ -179,12 +191,12 @@ class AltIMU10v5 (threading.Thread):
         h = d*(42023.1/(1-d)+t)
         return h
 
-    def _getCurrBaro(self):
+    '''def _getCurrBaro(self):
         return ((self._i2c.readU8(self._BAR, _LPS25H.PRESS_OUT_H) << 8 | self._i2c.readU8(self._BAR, _LPS25H.PRESS_OUT_XL)) << 8 | self._i2c.readU8(self._BAR, _LPS25H.PRESS_OUT_H))/self._barSens
 
     def _getCurrTemp(self):
         return (self._i2c.readU8(self._BAR, _LPS25H.TEMP_OUT_L) << 8 | self._i2c.readU8(self._BAR, _LPS25H.TEMP_OUT_H))/self._tempSens
-
+    '''
     def _readXl(self):
         pass
         while self._running:
@@ -193,8 +205,8 @@ class AltIMU10v5 (threading.Thread):
     def stop(self):
         self._running = False
         #self._readXlThread.stop()
-        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL1_XL, 0x00)
-        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL2_G, 0x00)
+        #self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL1_XL, 0x00)
+        #self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL2_G, 0x00)
 
 
 class _LSM6DS33(IntEnum):       
@@ -205,6 +217,9 @@ class _LSM6DS33(IntEnum):
     CTRL3_C = 0x12 # управляющий регистр 0x04 для работы i2c
     CTRL5_C = 0x14 #
     CTRL7_G = 0x16 # настройка производительности гироскопа
+    CTRL10_C = 0x19 #
+
+    FIFO_CTRL5 = 0x0A # управление ODR FIFO
 
     STATUS_REG = 0x1e #наличие новых данных с датчиков b00000TDA,GDA,XLDA
 
@@ -225,7 +240,22 @@ class _LSM6DS33(IntEnum):
     OUTY_L_XL = 0x2A # Y ускорение 
     OUTY_H_XL = 0x2B
     OUTZ_L_XL = 0x2C # Z ускорение
-    OUTZ_H_XL = 0x2D       
+    OUTZ_H_XL = 0x2D   
+    
+    ACC_GYRO_ODR_G_POWER_DOWN = 0x00 #CTRL2_G/CTRL1_XL ODR ODR;ODR;ODR;ODR;xxxx 
+    ACC_GYRO_ODR_G_13Hz = 0x10
+    ACC_GYRO_ODR_G_26Hz = 0x20
+    ACC_GYRO_ODR_G_52Hz = 0x30
+    ACC_GYRO_ODR_G_104Hz = 0x40
+    ACC_GYRO_ODR_G_208Hz = 0x50
+    ACC_GYRO_ODR_G_416Hz = 0x60
+    ACC_GYRO_ODR_G_833Hz = 0x70
+    ACC_GYRO_ODR_G_1660Hz = 0x80
+
+    GYRO_FS_G_245dps = 0x00 # CTRL2_G FS selection
+    GYRO_FS_G_500dps = 0x04
+    GYRO_FS_G_1000dps = 0x08
+    GYRO_FS_G_2000dps = 0x0C
 
 class _LPS25H(IntEnum):
     ### Регистры для LPS25H барометр ###
