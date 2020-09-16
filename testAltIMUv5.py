@@ -5,13 +5,13 @@ controller = AltIMUv5.AltIMU10v5()
 run = True
 try:
     while run:
-        data = controller.getXlCurr()[2]
+        data = controller.getAngles()
         if data is not None:
-            print("SHIT: %d" % (data))
+            print(data)
         else:
             pass
             #print('None')
-        time.sleep(0.5)
+        time.sleep(0.1)
 except KeyboardInterrupt:
     run = False
 controller.stop()
