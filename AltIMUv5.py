@@ -4,6 +4,12 @@ import threading
 from math import *
 from enum import IntEnum
 import os
+from scipy.spatial.transform import Rotation
+
+
+deltat = 0.001
+gyroMeasError = 3.14159265358979 * (5.0 / 180.0)
+beta = sqrt(3.0 / 4.0) * gyroMeasError
 
 class gyroXlSensorException(Exception):
     def __init__(self, message):
@@ -119,6 +125,11 @@ class AltIMU10v5 (threading.Thread):
         self._prevTimeXl = 0 # время от предыдущего измерения для акселлерометра
         self._prevTimeG = 0
 
+        self.SEq_1 = 1.0
+        self.SEq_2 = 0.0 
+        self.SEq_3 = 0.0
+        self.SEq_4 = 0.0
+
         self.currAlt = None
 
         self._running = True
@@ -126,19 +137,22 @@ class AltIMU10v5 (threading.Thread):
         self._readXlThread.start()
 
     def init_gyro(self):
-        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL3_C, 0x44) #IF_INC and BDU enable
-        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.FIFO_CTRL5, 0x00) #FIFO mode bypass
-        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL2_G, _LSM6DS33.ACC_GYRO_ODR_G_POWER_DOWN)#выключаем датчик
-        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL2_G, _LSM6DS33.ACC_GYRO_ODR_G_POWER_DOWN)
-        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL10_C, 0x38) #включим оси
-        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL2_G, _LSM6DS33.ACC_GYRO_ODR_G_833Hz | _LSM6DS33.GYRO_FS_G_500dps)# включаем на скорость 833 Гц
+        #self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL3_C, 0x44) #IF_INC and BDU enable
+        #self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.FIFO_CTRL5, 0x00) #FIFO mode bypass
+        #self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL2_G, _LSM6DS33.ACC_GYRO_ODR_G_POWER_DOWN)#выключаем датчик
+        #self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL10_C, 0x38) #включим оси
+        #self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL2_G, _LSM6DS33.ACC_GYRO_ODR_G_833Hz | _LSM6DS33.GYRO_FS_G_500dps)# включаем на скорость 833 Гц
 
-        '''self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL1_XL, (0b1000 << 2 | xlResolution) << 2 & 0xFC) # 1.66 kHz ±4 g by default
-        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL2_G, (0b1000 << 2 | gyroResolution) << 2 & 0xFE) # 1.66 kHz  ±250 dps by default
+        #self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL1_XL, (0b1000 << 2 | 0b10) << 2 & 0xFC) # 1.66 kHz ±4 g by default
+        #self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL2_G, (0b1000 << 2 | 0b10) << 2 & 0xFE) # 1.66 kHz  ±250 dps by default
         #self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL3_C, 0x04)
-        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL7_G, 0x60) 
+        '''self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL7_G, 0x60) 
         #self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL5_C, 0x6c)
         '''
+        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL1_XL, (0b1000 << 2 | 0b10) << 2 & 0xFC) # 1.66 kHz ±4 g by default
+        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL2_G, (0b1000 << 2 | 0b10) << 2 & 0xFC) # 1.66 kHz  ±250 dps by default
+        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.CTRL3_C, 0x04)
+        self._i2c.writeByteData(self._GYRO_ACCEL, _LSM6DS33.ORIENT_CFG_G, 0b00001000) # меняем знак по z
 
     def getGyroCurr(self):
         """
@@ -147,10 +161,19 @@ class AltIMU10v5 (threading.Thread):
         """
         if(self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.STATUS_REG) & 0x02 == 0x02):
             try:
-                x = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTX_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTX_L_G))*self._gSens
-                y = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTY_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTY_L_G))*self._gSens
-                z = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTZ_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTZ_L_G))*self._gSens
-
+                #uint = signed  + 2^n
+                x = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTX_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTX_L_G))
+                y = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTY_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTY_L_G))
+                z = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTZ_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTZ_L_G))
+                if(x>2**15-1):
+                    x -=2**16
+                if(y>2**15-1):
+                    y -=2**16
+                if(z>2**15-1):
+                    z -=2**16
+                x*= self._gSens/180*3.14159265358979
+                y*= self._gSens/180*3.14159265358979
+                z*= self._gSens/180*3.14159265358979
                 return [x, y, z]
             except:
                 self.stop()
@@ -164,13 +187,20 @@ class AltIMU10v5 (threading.Thread):
         :output вывод [x,y,z]
         """
         _state = self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.STATUS_REG)
-        print(_state)
         if(_state & 0x01 == 0x01):
             try:
-                x = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTX_H_XL) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTX_L_XL))*self._xlSens
-                y = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTY_H_XL) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTY_L_XL))*self._xlSens
-                z = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTZ_H_XL) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTZ_L_XL))*self._xlSens
-
+                x = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTX_H_XL) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTX_L_XL))
+                y = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTY_H_XL) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTY_L_XL))
+                z = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTZ_H_XL) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTZ_L_XL))
+                if(x>2**15-1):
+                    x -=2**16
+                if(y>2**15-1):
+                    y -=2**16
+                if(z>2**15-1):
+                    z -=2**16
+                x*= self._xlSens
+                y*= self._xlSens
+                z*= self._xlSens
                 return [x, y, z]
             except:
                 self.stop()
@@ -197,6 +227,69 @@ class AltIMU10v5 (threading.Thread):
     def _getCurrTemp(self):
         return (self._i2c.readU8(self._BAR, _LPS25H.TEMP_OUT_L) << 8 | self._i2c.readU8(self._BAR, _LPS25H.TEMP_OUT_H))/self._tempSens
     '''
+
+    def filter(self,w_x, w_y, w_z, a_x, a_y, a_z):
+        #Axulirary variables to avoid reapeated calcualtions
+        halfSEq_1 = 0.5 * self.SEq_1
+        halfSEq_2 = 0.5 * self.SEq_2
+        halfSEq_3 = 0.5 * self.SEq_3
+        halfSEq_4 = 0.5 * self.SEq_4
+        twoSEq_1 = 2.0 * self.SEq_1
+        twoSEq_2 = 2.0 * self.SEq_2
+        twoSEq_3 = 2.0 * self.SEq_3
+        #Normalise the accelerometer measurement
+        norm = sqrt(a_x * a_x + a_y * a_y + a_z * a_z)
+        a_x /= norm
+        a_y /= norm
+        a_z /= norm
+        #Compute the objective function and Jacobian
+        f_1 = twoSEq_2 * SEq_4 - twoSEq_1 * SEq_3 - a_x
+        f_2 = twoSEq_1 * SEq_2 + twoSEq_3 * SEq_4 - a_y
+        f_3 = 1.0 - twoSEq_2 * SEq_2 - twoSEq_3 * SEq_3 - a_z
+        J_11or24 = twoSEq_3;
+        J_12or23 = 2.0 * SEq_4
+        J_13or22 = twoSEq_1
+        J_14or21 = twoSEq_2
+        J_32 = 2.0 * J_14or21
+        J_33 = 2.0 * J_11or24
+        #Compute the gradient (matrix multiplication)
+        SEqHatDot_1 = J_14or21 * f_2 - J_11or24 * f_1
+        SEqHatDot_2 = J_12or23 * f_1 + J_13or22 * f_2 - J_32 * f_3
+        SEqHatDot_3 = J_12or23 * f_2 - J_33 * f_3 - J_13or22 * f_1
+        SEqHatDot_4 = J_14or21 * f_1 + J_11or24 * f_2
+        #Normalise the gradient
+        norm = sqrt(SEqHatDot_1 * SEqHatDot_1 + SEqHatDot_2 * SEqHatDot_2 + SEqHatDot_3 * SEqHatDot_3 + SEqHatDot_4 * SEqHatDot_4)
+        SEqHatDot_1 /= norm
+        SEqHatDot_2 /= norm
+        SEqHatDot_3 /= norm
+        SEqHatDot_4 /= norm
+        #Compute the quaternion derrivative measured by gyroscopes
+        SEqDot_omega_1 = -halfSEq_2 * w_x - halfSEq_3 * w_y - halfSEq_4 * w_z
+        SEqDot_omega_2 = halfSEq_1 * w_x + halfSEq_3 * w_z - halfSEq_4 * w_y
+        SEqDot_omega_3 = halfSEq_1 * w_y - halfSEq_2 * w_z + halfSEq_4 * w_x
+        SEqDot_omega_4 = halfSEq_1 * w_z + halfSEq_2 * w_y - halfSEq_3 * w_x
+        #Compute then integrate the estimated quaternion derrivative
+        SEq_1 += (SEqDot_omega_1 - (beta * SEqHatDot_1)) * deltat
+        SEq_2 += (SEqDot_omega_2 - (beta * SEqHatDot_2)) * deltat
+        SEq_3 += (SEqDot_omega_3 - (beta * SEqHatDot_3)) * deltat
+        SEq_4 += (SEqDot_omega_4 - (beta * SEqHatDot_4)) * deltat
+        #Normalise quaternion
+        norm = sqrt(self.SEq_1 * self.SEq_1 + self.SEq_2 * self.SEq_2 + self.SEq_3 * self.SEq_3 + self.SEq_4 * self.SEq_4)
+        self.SEq_1 /= norm
+        self.SEq_2 /= norm
+        self.SEq_3 /= norm
+        self.SEq_4 /= norm
+
+    def getAngles(self):
+        w_x, w_y, w_z = self.getGyroCurr()
+        a_x, a_y, a_z = self.getXlCurr()
+        print(w_x)
+        print(a_z)
+        #self.filter(w_x,w_y,w_z,a_x,a_y,a_z)
+        rot_quat = [self.SEq_1,self.SEq_2,self.SEq_3,self.SEq_4]       
+        rot = Rotation.from_quat(rot_quat)
+        return rot.as_euler('xyz', degrees=True)
+
     def _readXl(self):
         pass
         while self._running:
