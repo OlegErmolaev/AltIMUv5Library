@@ -1,6 +1,6 @@
 import AltIMUv5
 import time
-controller = AltIMUv5.AltIMU10v5(gyroResolution=0b00)
+controller = AltIMUv5.AltIMU10v5(gyroResolution=0b01)
 #controller.start()
 run = True
 try:

@@ -147,9 +147,10 @@ class AltIMU10v5 (threading.Thread):
         """
         if(self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.STATUS_REG) & 0x02 == 0x02):
             try:
-                x = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTX_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTX_L_G))*self._gSens
-                y = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTY_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTY_L_G))*self._gSens
-                z = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTZ_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTZ_L_G))*self._gSens
+                x = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTX_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTX_L_G))#*self._gSens #recieve uint data
+                y = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTY_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTY_L_G))#*self._gSens #recieve uint data
+                z = (self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTZ_H_G) << 8 | self._i2c.readU8(self._GYRO_ACCEL, _LSM6DS33.OUTZ_L_G))#*self._gSens #recieve uint data
+
 
                 return [x, y, z]
             except:
